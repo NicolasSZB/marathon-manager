@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Marathon Manager</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cellipse cx='16' cy='13' rx='9' ry='11' fill='%23fff'/%3E%3Cpath d='M16 24v7' stroke='%23fff'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>marathon<span>manager</span></h1>
+    <nav>
+      <button data-view="rooms" title="Atalho: 1">Salas</button>
+      <button data-view="balloons" title="Atalho: 2">Balões <span id="badge" class="badge"></span></button>
+      <button data-view="setup" title="Atalho: 3">Configuração</button>
+    </nav>
+    <span class="spacer"></span>
+    <span id="clock" class="clock"></span>
+  </header>
+
+  <main>
+    <section id="view-rooms" class="view">
+      <aside>
+        <div class="aside-head">
+          <span>Salas</span>
+          <button id="add-room" class="icon" title="Nova sala">+</button>
+        </div>
+        <ul id="room-list"></ul>
+      </aside>
+      <div id="room-panel" class="panel"></div>
+    </section>
+
+    <section id="view-balloons" class="view">
+      <div id="balloon-panel" class="panel"></div>
+    </section>
+
+    <section id="view-setup" class="view">
+      <div id="setup-panel" class="panel"></div>
+    </section>
+  </main>
+
+  <dialog id="modal"><div id="modal-body"></div></dialog>
+
+  <dialog id="confirm" class="confirm">
+    <p id="confirm-msg"></p>
+    <div class="modal-foot">
+      <span class="spacer"></span>
+      <button class="btn" id="confirm-no">Cancelar</button>
+      <button class="btn" id="confirm-yes">Confirmar</button>
+    </div>
+  </dialog>
+
+  <!-- camada de efeitos (balões voando e notificações), sempre acima dos modais -->
+  <div id="fx" popover="manual"><div id="toasts"></div></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
