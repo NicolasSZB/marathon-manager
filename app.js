@@ -27,13 +27,14 @@ function defaultState() {
     rooms: [],   // { id, name, rows, cols, blocked: ['r,c'], seats: { 'r,c': teamId } }
     teams: [],   // { id, name }
     solves: [],  // { id, teamId, problemId, time, delivered, deliveredAt }
+    podium: [],  // { teamId, solved, penalty }
   };
 }
 
 function load() {
   try {
     const s = JSON.parse(localStorage.getItem(KEY));
-    if (s && Array.isArray(s.problems)) return s;
+    if (s && Array.isArray(s.problems)) { s.podium ??= []; return s; }
   } catch { /* dados corrompidos: recomeça */ }
   return defaultState();
 }
@@ -75,6 +76,28 @@ const where = teamId => {
 function unseat(teamId) {
   const loc = locate(teamId);
   if (loc) delete loc.room.seats[loc.key];
+}
+
+function deleteTeam(teamId) {
+  unseat(teamId);
+  state.teams = state.teams.filter(x => x.id !== teamId);
+  state.solves = state.solves.filter(s => s.teamId !== teamId);
+  state.podium = state.podium.filter(e => e.teamId !== teamId);
+}
+
+const solvedCount = teamId => state.solves.filter(s => s.teamId === teamId).length;
+
+/** Classificação estilo maratona: mais resolvidos, depois menor penalidade. Empates dividem a posição. */
+function ranking() {
+  const rows = state.podium
+    .filter(e => teamById(e.teamId))
+    .map(e => ({ ...e, team: teamById(e.teamId) }))
+    .sort((a, b) => b.solved - a.solved || a.penalty - b.penalty || a.team.name.localeCompare(b.team.name));
+  rows.forEach((r, i) => {
+    const prev = rows[i - 1];
+    r.pos = prev && prev.solved === r.solved && prev.penalty === r.penalty ? prev.pos : i + 1;
+  });
+  return rows;
 }
 
 function firstFreeSeat(room) {
@@ -139,7 +162,8 @@ function launchBalloons(el, color, count = 1) {
   for (let i = 0; i < count; i++) {
     const b = document.createElement('div');
     b.className = 'float-balloon';
-    b.style.left = `${r.left + r.width / 2 - 14 + (count > 1 ? (Math.random() * 60 - 30) : 0)}px`;
+    const spread = count > 1 ? Math.max(30, Math.min(r.width / 2, 80)) : 0;
+    b.style.left = `${r.left + r.width / 2 - 14 + (Math.random() * 2 - 1) * spread}px`;
     b.style.top = `${r.top + r.height / 2 - 17}px`;
     b.style.setProperty('--c', color);
     b.style.setProperty('--sway', `${Math.random() * 90 - 45}px`);
@@ -195,12 +219,13 @@ function ask(message, { ok = 'Confirmar', danger = true } = {}) {
 
 const dialog = $('#modal');
 function showModal(html, bind) {
+  dialog.classList.remove('stage-dialog');
   $('#modal-body').innerHTML = html;
   bind?.($('#modal-body'));
   openDialog(dialog);
 }
 const closeModal = () => closeDialog(dialog);
-dialog.addEventListener('close', () => { ui.modal = null; });
+dialog.addEventListener('close', () => { ui.modal = null; dialog.classList.remove('stage-dialog'); });
 dialog.addEventListener('cancel', e => { e.preventDefault(); closeModal(); });
 dialog.addEventListener('mousedown', e => {
   if (e.target === dialog) {
@@ -232,6 +257,7 @@ function render() {
 
   if (ui.view === 'rooms') renderRooms();
   else if (ui.view === 'balloons') renderBalloons();
+  else if (ui.view === 'podium') renderPodium();
   else renderSetup();
   ui.intro = false;
 }
@@ -310,7 +336,7 @@ function renderRooms() {
       <div class="grid${ui.edit ? ' editing' : ''}${ui.intro ? ' intro' : ''}" style="grid-template-columns:repeat(${room.cols}, minmax(108px, 1fr))">${cells}</div>
     </div>
     ${ui.edit ? '' : `<p class="hint">Clique numa mesa para adicionar uma equipe ou marcar problemas · arraste para trocar de lugar
-      (ou solte sobre outra sala) · clique num balão piscando para marcá-lo como entregue · atalhos <kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd></p>`}`;
+      (ou solte sobre outra sala) · clique num balão piscando para marcá-lo como entregue · atalhos <kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> <kbd>4</kbd></p>`}`;
 }
 
 async function resizeRoom(room, rows, cols) {
@@ -371,6 +397,96 @@ function renderBalloons() {
       <div><h2>Entregues <span class="muted">${done.length}</span></h2>
         <ul class="blist${intro}">${done.map(item).join('') || '<li class="muted">Nada entregue ainda.</li>'}</ul></div>
     </div>`;
+}
+
+/* ---- pódio ---- */
+
+const PLACE_COLORS = { 1: '#e6c35c', 2: '#c9d1d6', 3: '#d08a55' };
+
+/** Degraus na ordem visual 2º · 1º · 3º. `veiled` esconde os nomes (modo apresentação). */
+function podiumSteps(rows, { veiled = false, animate = false } = {}) {
+  return [2, 1, 3].map(place => {
+    const r = rows[place - 1];
+    if (!r) return `<div class="step p${place} vacant"><div class="who"></div><div class="block">${place}º</div></div>`;
+    const pop = animate && fresh(`top:${place}:${r.teamId}`) ? ' enter' : '';
+    return `<div class="step p${place}${veiled ? ' veiled' : ''}" data-place="${place}">
+      <div class="who${pop}"><b>${esc(r.team.name)}</b>
+        <small>${r.solved} ${r.solved === 1 ? 'problema' : 'problemas'} · ${r.penalty} min</small></div>
+      <div class="block">${r.pos}º</div></div>`;
+  }).join('');
+}
+
+function renderPodium() {
+  const rows = ranking();
+  const avail = state.teams.filter(t => !state.podium.some(e => e.teamId === t.id))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  const list = rows.map(r => `
+    <div class="rank-row${fresh('pd:' + r.teamId) && !ui.intro ? ' enter' : ''}" data-team="${r.teamId}">
+      <span class="pos pos-${r.pos}">${r.pos}º</span>
+      <span class="tname">${esc(r.team.name)}<small>${esc(where(r.teamId))} · ${solvedCount(r.teamId)} acerto(s) registrado(s)</small></span>
+      <input type="number" min="0" data-pd="solved" data-fk="s:${r.teamId}" value="${r.solved}" aria-label="Problemas resolvidos">
+      <input type="number" min="0" data-pd="penalty" data-fk="p:${r.teamId}" value="${r.penalty}" aria-label="Penalidade em minutos">
+      <button class="icon" data-pd-del="${r.teamId}" title="Remover do pódio">×</button>
+    </div>`).join('');
+
+  $('#podium-panel').innerHTML = `
+    <div class="podium${ui.intro ? ' intro' : ''}">${podiumSteps(rows, { animate: !ui.intro })}</div>
+    <div class="quick">
+      <span class="muted">Adicionar equipe</span>
+      <select id="pd-team"><option value="">Equipe…</option>${avail.map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('')}</select>
+      <button class="btn primary" data-act="pd-add">Adicionar</button>
+      <button class="btn" data-act="pd-add-all" ${avail.length ? '' : 'disabled'}>Adicionar todas</button>
+      <span class="spacer"></span>
+      <button class="btn" data-act="pd-sync" ${rows.length ? '' : 'disabled'} title="Preenche “resolvidos” com os acertos marcados no app">Sincronizar acertos</button>
+      <button class="btn" data-act="present" ${rows.length ? '' : 'disabled'}>Apresentar ▸</button>
+    </div>
+    <div class="ranking">
+      <div class="rank-row head"><span>#</span><span>Equipe</span><span>Resolvidos</span><span>Penalidade (min)</span><span></span></div>
+      ${list || '<p class="muted">Adicione equipes para montar o pódio.</p>'}
+    </div>
+    <p class="hint">Ordenação: mais problemas resolvidos; no empate, menor penalidade. Equipes com os mesmos valores dividem a posição.</p>`;
+}
+
+/** Re-renderiza animando as linhas do ranking até a nova posição (técnica FLIP). */
+function withFlip(fn) {
+  const before = new Map($$('.rank-row[data-team]').map(el => [el.dataset.team, el.getBoundingClientRect().top]));
+  fn();
+  if (reducedMotion) return;
+  for (const el of $$('.rank-row[data-team]')) {
+    const top = before.get(el.dataset.team);
+    if (top == null) continue;
+    const dy = top - el.getBoundingClientRect().top;
+    if (Math.abs(dy) > 1)
+      el.animate([{ transform: `translateY(${dy}px)` }, { transform: 'none' }], { duration: 450, easing: 'cubic-bezier(.2,.8,.2,1)' });
+  }
+}
+
+/** Revela 3º, 2º e 1º lugares um de cada vez — ideal para a premiação no projetor. */
+function openPresentation() {
+  const rows = ranking();
+  const order = [3, 2, 1].filter(p => rows[p - 1]);
+  let step = 0;
+  ui.modal = { type: 'stage' };
+  showModal(`
+    <div class="stage-title">Pódio</div>
+    <div class="podium stage">${podiumSteps(rows, { veiled: true })}</div>
+    <div class="modal-foot">
+      <button class="btn" data-close>Fechar</button>
+      <span class="spacer"></span>
+      <button class="btn primary" id="st-next" autofocus>Revelar ${order[0]}º lugar</button>
+    </div>`, root => {
+    $('#st-next', root).onclick = () => {
+      if (step >= order.length) return closeModal();
+      const place = order[step++];
+      const el = $(`.step[data-place="${place}"]`, root);
+      el.classList.remove('veiled');
+      el.classList.add('reveal');
+      launchBalloons($('.block', el), PLACE_COLORS[place], place === 1 ? 10 : 4);
+      $('#st-next', root).textContent = step < order.length ? `Revelar ${order[step]}º lugar` : 'Encerrar';
+    };
+  });
+  dialog.classList.add('stage-dialog');
 }
 
 /* ---- configuração ---- */
@@ -515,9 +631,7 @@ function openTeam(teamId, popProblem) {
     });
     $('#tm-del', root).onclick = async () => {
       if (!await ask(`Excluir a equipe "${t.name}" e todos os seus balões?`, { ok: 'Excluir' })) return;
-      unseat(teamId);
-      state.teams = state.teams.filter(x => x.id !== teamId);
-      state.solves = state.solves.filter(s => s.teamId !== teamId);
+      deleteTeam(teamId);
       closeModal();
       save();
     };
@@ -542,7 +656,7 @@ $('nav').addEventListener('click', e => {
 document.addEventListener('keydown', e => {
   if (e.ctrlKey || e.metaKey || e.altKey || document.querySelector('dialog[open]')) return;
   if (e.target.closest('input, textarea, select')) return;
-  const view = { 1: 'rooms', 2: 'balloons', 3: 'setup' }[e.key];
+  const view = { 1: 'rooms', 2: 'balloons', 3: 'podium', 4: 'setup' }[e.key];
   if (view) setView(view);
 });
 
@@ -681,6 +795,47 @@ balloonPanel.addEventListener('change', e => {
   if (e.target.id === 'b-room') { ui.balloonRoom = e.target.value; ui.intro = true; render(); }
 });
 
+// pódio
+const podiumPanel = $('#podium-panel');
+podiumPanel.addEventListener('click', async e => {
+  const del = e.target.closest('[data-pd-del]')?.dataset.pdDel;
+  if (del) return withFlip(() => { state.podium = state.podium.filter(x => x.teamId !== del); save(); });
+
+  const act = e.target.closest('[data-act]')?.dataset.act;
+  const add = id => state.podium.push({ teamId: id, solved: solvedCount(id), penalty: 0 });
+  if (act === 'pd-add') {
+    const id = $('#pd-team').value;
+    if (!id) return $('#pd-team').focus();
+    withFlip(() => { add(id); save(); });
+  } else if (act === 'pd-add-all') {
+    withFlip(() => {
+      state.teams.filter(t => !state.podium.some(x => x.teamId === t.id)).forEach(t => add(t.id));
+      save();
+    });
+  } else if (act === 'pd-sync') {
+    if (!await ask('Substituir os “resolvidos” de cada equipe pela quantidade de acertos marcados no app? As penalidades não mudam.', { ok: 'Sincronizar', danger: false })) return;
+    withFlip(() => { state.podium.forEach(x => { x.solved = solvedCount(x.teamId); }); save(); });
+  } else if (act === 'present') {
+    openPresentation();
+  }
+});
+podiumPanel.addEventListener('change', e => {
+  const field = e.target.dataset.pd;
+  if (!field) return;
+  const entry = state.podium.find(x => x.teamId === e.target.closest('[data-team]').dataset.team);
+  entry[field] = Math.max(0, Math.floor(+e.target.value || 0));
+  persist();
+  // espera o foco ir para o próximo campo, re-renderiza com animação e devolve o foco
+  requestAnimationFrame(() => {
+    const fk = document.activeElement?.dataset?.fk;
+    withFlip(render);
+    if (fk) $(`[data-fk="${fk}"]`)?.focus();
+  });
+});
+podiumPanel.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && e.target.dataset.pd) e.target.blur();
+});
+
 // configuração
 const setupPanel = $('#setup-panel');
 setupPanel.addEventListener('change', async e => {
@@ -707,6 +862,7 @@ setupPanel.addEventListener('change', async e => {
       if (!['problems', 'rooms', 'teams', 'solves'].every(k => Array.isArray(data[k]))) throw new Error();
     } catch { return toast('Arquivo inválido.'); }
     if (!await ask('Substituir todos os dados atuais pelo arquivo importado?', { ok: 'Importar' })) return;
+    data.podium = Array.isArray(data.podium) ? data.podium : [];
     state = data;
     ui.intro = true;
     save();
@@ -727,9 +883,7 @@ setupPanel.addEventListener('click', async e => {
   if (delTeam) {
     const t = teamById(delTeam);
     if (!await ask(`Excluir a equipe "${t.name}"?`, { ok: 'Excluir' })) return;
-    unseat(delTeam);
-    state.teams = state.teams.filter(x => x !== t);
-    state.solves = state.solves.filter(s => s.teamId !== delTeam);
+    deleteTeam(delTeam);
     return save();
   }
   const act = e.target.closest('[data-act]')?.dataset.act;
