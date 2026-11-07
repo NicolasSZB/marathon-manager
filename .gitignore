@@ -17,3 +17,6 @@ maratona-*.json
 # Logs e temporários
 *.log
 *.tmp
+
+# Arquivos pessoais que não fazem parte do app
+sol.py
